@@ -240,7 +240,7 @@ func JoinCluster(hostConfig, clusterConfig *rest.Config, federationNamespace, cl
 	glog.V(2).Infof("Creating %s namespace in joining cluster", federationNamespace)
 	_, err = createFederationNamespace(clusterClientset, federationNamespace,
 		joiningClusterName, dryRun)
-	if err != nil {
+	if err != nil && (errorOnExisting || !apierrors.IsAlreadyExists(err)) {
 		glog.V(2).Infof("Error creating %s namespace in joining cluster: %v",
 			federationNamespace, err)
 		return err
@@ -454,10 +454,18 @@ func createFederationNamespace(clusterClientset kubeclient.Interface, federation
 		return federationNS, nil
 	}
 
-	_, err := clusterClientset.CoreV1().Namespaces().Create(federationNS)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		glog.V(2).Infof("Could not create %s namespace: %v", federationNamespace, err)
-		return nil, err
+	federationNS, err := clusterClientset.CoreV1().Namespaces().Get(federationNamespace, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			glog.V(2).Infof("Could not retrieve %s namespace: %v", federationNamespace, err)
+			return nil, err
+		}
+
+		federationNS, err = clusterClientset.CoreV1().Namespaces().Create(federationNS)
+		if err != nil {
+			glog.V(2).Infof("Could not create %s namespace: %v", federationNamespace, err)
+			return nil, err
+		}
 	}
 	return federationNS, nil
 }
@@ -493,19 +501,20 @@ func createRBACSecret(hostClusterClientset, joiningClusterClientset kubeclient.I
 		glog.V(2).Infof("Created role and binding for service account: %s in joining cluster: %s",
 			saName, joiningClusterName)
 
-		glog.V(2).Infof("Creating health check cluster role and binding for service account: %s in joining cluster: %s", saName, joiningClusterName)
+		if hostClusterName != joiningClusterName {
+			glog.V(2).Infof("Creating health check cluster role and binding for service account: %s in joining cluster: %s", saName, joiningClusterName)
 
-		err = createHealthCheckClusterRoleAndBinding(joiningClusterClientset, saName, namespace, joiningClusterName,
-			dryRun, errorOnExisting)
-		if err != nil {
-			glog.V(2).Infof("Error creating health check cluster role and binding for service account: %s in joining cluster: %s due to: %v",
-				saName, joiningClusterName, err)
-			return nil, err
+			err = createHealthCheckClusterRoleAndBinding(joiningClusterClientset, saName, namespace, joiningClusterName,
+				dryRun, errorOnExisting)
+			if err != nil {
+				glog.V(2).Infof("Error creating health check cluster role and binding for service account: %s in joining cluster: %s due to: %v",
+					saName, joiningClusterName, err)
+				return nil, err
+			}
+
+			glog.V(2).Infof("Created health check cluster role and binding for service account: %s in joining cluster: %s",
+				saName, joiningClusterName)
 		}
-
-		glog.V(2).Infof("Created health check cluster role and binding for service account: %s in joining cluster: %s",
-			saName, joiningClusterName)
-
 	} else {
 		glog.V(2).Infof("Creating cluster role and binding for service account: %s in joining cluster: %s", saName, joiningClusterName)
 
